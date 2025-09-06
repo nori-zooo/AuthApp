@@ -4,19 +4,49 @@
   "main": "index.ts",
   "scripts": {
     "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
-    "web": "expo start --web"
+    "android": "DARK_MODE=media expo start --android",
+    "ios": "DARK_MODE=media expo start --ios",
+    "web": "DARK_MODE=media expo start --web"
   },
   "dependencies": {
+    "@expo/html-elements": "^0.4.2",
+    "@expo/metro-runtime": "~5.0.4",
+    "@gluestack-style/react": "^1.0.57",
+    "@gluestack-ui/alert": "^0.1.16",
+    "@gluestack-ui/avatar": "^0.1.18",
+    "@gluestack-ui/button": "^1.0.14",
+    "@gluestack-ui/config": "^1.1.20",
+    "@gluestack-ui/icon": "^0.1.27",
+    "@gluestack-ui/input": "^0.1.38",
+    "@gluestack-ui/nativewind-utils": "^1.0.26",
+    "@gluestack-ui/overlay": "^0.1.22",
+    "@gluestack-ui/themed": "^1.1.73",
+    "@gluestack-ui/toast": "^1.0.9",
+    "@react-native-async-storage/async-storage": "2.1.2",
+    "@react-navigation/native": "^7.1.17",
+    "@react-navigation/native-stack": "^7.3.25",
+    "@supabase/supabase-js": "^2.56.0",
+    "babel-plugin-module-resolver": "^5.0.2",
     "expo": "~53.0.22",
     "expo-status-bar": "~2.2.3",
+    "lucide-react-native": "^0.542.0",
+    "nativewind": "^4.1.23",
     "react": "19.0.0",
-    "react-native": "0.79.6"
+    "react-dom": "19.0.0",
+    "react-native": "0.79.5",
+    "react-native-css-interop": "^0.1.22",
+    "react-native-gesture-handler": "~2.24.0",
+    "react-native-reanimated": "~3.17.4",
+    "react-native-safe-area-context": "5.4.0",
+    "react-native-screens": "~4.11.1",
+    "react-native-svg": "15.11.2",
+    "react-native-web": "^0.20.0",
+    "tailwindcss": "^3.4.17"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
     "@types/react": "~19.0.10",
+    "jscodeshift": "^0.15.2",
     "typescript": "~5.8.3"
   },
   "private": true
