@@ -6,10 +6,17 @@
       "@/*": [
         "./*"
       ],
+      "src/*": [
+        "./src/*"
+      ],
+      "app/*": [
+        "./app/*"
+      ],
       "tailwind.config": [
         "./tailwind.config.js"
       ]
-    }
+    },
+    "allowImportingTsExtensions": false
   },
   "include": [
     "**/*.ts",

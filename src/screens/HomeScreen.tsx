@@ -8,9 +8,13 @@ import { Avatar, AvatarFallbackText } from '@/components/ui/avatar';
 import { Card } from '@/components/ui/card';
 import { Heading } from '@/components/ui/heading';
 import { useAuth } from '../contexts/AuthContext';
+import { useNavigation } from '@react-navigation/native';
+import { RootTabParamList } from '@/app/types/navigation';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 
 const HomeScreen = () => {
   const { user, signOut } = useAuth();
+  const navigation = useNavigation<NativeStackNavigationProp<RootTabParamList>>();
 
   const handleSignOut = async () => {
     try {
@@ -25,7 +29,7 @@ const HomeScreen = () => {
   };
 
   return (
-    <Box className="flex-1 p-4 bg-background-100">
+    <Box className="flex-1 p-4 bg-red-50">
       <VStack space="xl" className="mt-6">
         {/* ヘッダー */}
         <HStack className="items-center justify-between">
@@ -43,7 +47,7 @@ const HomeScreen = () => {
         </HStack>
 
         {/* ユーザー情報カード */}
-  <Card className="p-6 rounded-lg">
+        <Card className="p-6 rounded-lg">
           <VStack space="md">
             <Heading size="md">アカウント情報</Heading>
             <HStack className="justify-between">
@@ -65,11 +69,19 @@ const HomeScreen = () => {
 
         {/* アクション */}
         <VStack space="md">
-          <Button variant="outline" className="w-full">
+          <Button
+            variant="outline"
+            className="w-full"
+            onPress={() => navigation.navigate('Profile')}
+          >
             <ButtonText>プロフィール編集</ButtonText>
           </Button>
 
-          <Button variant="outline" className="w-full">
+          <Button
+            variant="outline"
+            className="w-full"
+            onPress={() => navigation.navigate('Settings')}
+          >
             <ButtonText>設定</ButtonText>
           </Button>
 
