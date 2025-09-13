@@ -1,8 +1,8 @@
 import React from 'react';
-import { Home, User, Settings } from 'lucide-react-native';
+import { Home, User, Plug, Settings } from 'lucide-react-native';
 
 type Props = {
-  name: 'home' | 'user' | 'settings';
+  name: 'home' | 'user' | 'plug' | 'settings';
   color?: string;
   size?: number;
 };
@@ -10,6 +10,7 @@ type Props = {
 const iconMap: Record<Props['name'], React.ComponentType<{ color?: string; size?: number }>> = {
   home: Home,
   user: User,
+  plug: Plug,
   settings: Settings,
 };
 

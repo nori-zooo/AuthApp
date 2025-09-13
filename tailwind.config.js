@@ -8,9 +8,14 @@ module.exports = {
     "App.{tsx,jsx,ts,js}",
     "index.{tsx,jsx,ts,js}",
     "components/**/*.{tsx,jsx,ts,js}",
-    "src/screens/**/*.{tsx,jsx,ts,js}"
+    "src/screens/**/*.{tsx,jsx,ts,js}",
+    // gluestack-ui を含める
+    "node_modules/@gluestack-ui/**/*.{js,ts,jsx,tsx}"
   ],
   presets: [require('nativewind/preset')],
+  plugins: [
+    gluestackPlugin, // gluestack-ui v3 用のプラグインを追加
+  ],
   safelist: [
     {
       pattern:

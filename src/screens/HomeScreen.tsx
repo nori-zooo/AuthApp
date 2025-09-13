@@ -7,6 +7,7 @@ import { Button, ButtonText } from '@/components/ui/button';
 import { Avatar, AvatarFallbackText } from '@/components/ui/avatar';
 import { Card } from '@/components/ui/card';
 import { Heading } from '@/components/ui/heading';
+import { Divider } from '@/components/ui/divider';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigation } from '@react-navigation/native';
 import { RootTabParamList } from '@/app/types/navigation';
@@ -80,16 +81,26 @@ const HomeScreen = () => {
           <Button
             variant="outline"
             className="w-full"
+            onPress={() => navigation.navigate('AppsListStack', { screen: 'AppsList' })}
+          >
+            <ButtonText>アプリ一覧</ButtonText>
+          </Button>
+
+          <Button
+            variant="outline"
+            className="w-full"
             onPress={() => navigation.navigate('Settings')}
           >
             <ButtonText>設定</ButtonText>
           </Button>
 
+          <Divider className="my-0.5 bg-gray-400" />
+
           <Button
             action="negative"
-            variant="outline"
+            variant="solid"
             onPress={handleSignOut}
-            className="w-full"
+            className="w-full bg-gray-300 border border-gray-400"
           >
             <ButtonText>ログアウト</ButtonText>
           </Button>
