@@ -4,7 +4,12 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import HomeScreen from '../../src/screens/HomeScreen';
 import ProfileScreen from '../../src/screens/ProfileScreen';
 import AppsListScreen from '../../src/screens/AppsListScreen';
+import PartsSampleScreen from '../../src/screens/PartsSampleScreen';
+import ImageUploadScreen from '../../src/screens/ImageUploadScreen';
+import MusicUploadScreen from '../../src/screens/MusicUploadScreen';
 import MapScreen from '../../src/screens/MapScreen';
+import GraphSampleScreen from '../../src/screens/GraphSampleScreen';
+import VictorySampleScreen from '../../src/screens/VictorySampleScreen';
 import SettingsScreen from '../../src/screens/SettingsScreen';
 import TabIcon from '../components/ui/tab/TabIcon';
 import type { AppsListStackParamList, RootTabParamList } from '../types/navigation';
@@ -31,6 +36,31 @@ function AppsListStackNavigator() {
         name="MapScreen"
         component={MapScreen}
         options={{ title: 'マップ画面' }}
+      />
+      <Stack.Screen
+        name="PartsSampleScreen"
+        component={PartsSampleScreen}
+        options={{ title: '部品サンプル' }}
+      />
+      <Stack.Screen
+        name="ImageUploadScreen"
+        component={ImageUploadScreen}
+        options={{ title: '画像アップロード' }}
+      />
+      <Stack.Screen
+        name="MusicUploadScreen"
+        component={MusicUploadScreen}
+        options={{ title: '音声アップロード' }}
+      />
+      <Stack.Screen
+        name="GraphSampleScreen"
+        component={GraphSampleScreen}
+        options={{ title: '売上グラフサンプル' }}
+      />
+      <Stack.Screen
+        name="VictorySampleScreen"
+        component={VictorySampleScreen}
+        options={{ title: 'Victory グラフサンプル' }}
       />
     </Stack.Navigator>
   );

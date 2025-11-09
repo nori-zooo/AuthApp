@@ -5,34 +5,41 @@ import * as Location from 'expo-location';
 
 const MapScreen: React.FC = () => {
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
-  const [searchQuery, setSearchQuery] = useState(''); // 検索クエリ
+  // 検索バーに入力された住所文字列を保持する
+  const [searchQuery, setSearchQuery] = useState('');
+  // MapView 上に表示する検索先の座標（未検索時は null）
   const [markerCoords, setMarkerCoords] = useState<{ latitude: number; longitude: number } | null>(null);
 
   useEffect(() => {
     (async () => {
+      // 初回レンダリング時に位置情報の利用許可をリクエスト
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
         console.error('位置情報のアクセスが許可されていません');
         return;
       }
 
+      // 許可が得られたら端末の現在地を取得して state に保存
       const currentLocation = await Location.getCurrentPositionAsync({});
       setLocation(currentLocation);
     })();
   }, []);
 
   const handleSearch = async () => {
+    // 入力チェック：空のまま検索しようとした場合は警告を表示
     if (!searchQuery) {
       Alert.alert('エラー', '住所を入力してください');
       return;
     }
 
     try {
+      // OpenStreetMap Nominatim API を用いて住所をジオコーディング（緯度経度の取得）
       const response = await fetch(
         `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}`
       );
       const data = await response.json();
 
+      // 1件もヒットしなかった場合はユーザーに通知
       if (data.length === 0) {
         Alert.alert('エラー', '住所が見つかりませんでした');
         return;
@@ -46,6 +53,7 @@ const MapScreen: React.FC = () => {
 
       // 地図を移動
       if (location) {
+        // MapView の region 更新のため、現在地 state を検索結果の座標で上書き
         setLocation({
           ...location,
           coords: {
@@ -82,12 +90,14 @@ const MapScreen: React.FC = () => {
       {location && (
         <MapView
           style={styles.map}
+          // 画面初期表示時の中心位置（現在地）
           initialRegion={{
             latitude: location.coords.latitude,
             longitude: location.coords.longitude,
             latitudeDelta: 0.01,
             longitudeDelta: 0.01,
           }}
+          // 検索後はマーカー座標を region に渡して地図を移動させる
           region={
             markerCoords
               ? {
@@ -101,6 +111,7 @@ const MapScreen: React.FC = () => {
         >
           {/* 現在地のマーカー */}
           <Marker
+            // 現在位置を青ピンとして表示
             coordinate={{
               latitude: location.coords.latitude,
               longitude: location.coords.longitude,
@@ -111,6 +122,7 @@ const MapScreen: React.FC = () => {
           {/* 検索結果のマーカー */}
           {markerCoords && (
             <Marker
+              // ユーザーが検索した地点を別ピンで表示
               coordinate={markerCoords}
               title="検索結果"
             />

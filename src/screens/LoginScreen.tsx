@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { Box } from '@/components/ui/box';
 import { VStack } from '@/components/ui/vstack';
 import { Text } from '@/components/ui/text';
@@ -15,6 +15,7 @@ const LoginScreen = ({ navigation }: any) => {
   const [error, setError] = useState('');
 
   const { signIn } = useAuth();
+  const passwordRef = useRef<any>(null);
 
   const handleLogin = async () => {
     if (!email || !password) {
@@ -53,6 +54,9 @@ const LoginScreen = ({ navigation }: any) => {
             onChangeText={setEmail}
             keyboardType="email-address"
             autoCapitalize="none"
+            returnKeyType="next"
+            blurOnSubmit={false}
+            onSubmitEditing={() => passwordRef.current?.focus?.()}
           />
         </Input>
 
@@ -62,6 +66,9 @@ const LoginScreen = ({ navigation }: any) => {
             value={password}
             onChangeText={setPassword}
             secureTextEntry
+            ref={passwordRef}
+            returnKeyType="done"
+            onSubmitEditing={handleLogin}
           />
         </Input>
 

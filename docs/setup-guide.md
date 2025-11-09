@@ -89,7 +89,17 @@ npx expo install react-dom react-native-web @expo/metro-runtime
 ```env
 EXPO_PUBLIC_SUPABASE_URL=your_supabase_url
 EXPO_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+# 画像アップロード用 (既定: images)
+EXPO_PUBLIC_SUPABASE_IMAGE_BUCKET=images
+# 既存のバケット名を流用したい場合の後方互換用
+EXPO_PUBLIC_SUPABASE_BUCKET=images
+# 音声アップロード用 (既定: audio)
+EXPO_PUBLIC_SUPABASE_AUDIO_BUCKET=audio
 ```
+
+`EXPO_PUBLIC_SUPABASE_IMAGE_BUCKET` を省略した場合は `images` バケットが使用されます（後方互換のため `EXPO_PUBLIC_SUPABASE_BUCKET` が設定されていればそちらを参照します）。
+
+`EXPO_PUBLIC_SUPABASE_AUDIO_BUCKET` を省略した場合でも、音声はデフォルトで `audio` バケットに保存されます。音声と画像を分離したい場合は、Supabase Storage で `audio` バケットを作成し、必要に応じて環境変数を変更してください。
 
 ### `app.config.js`で環境変数を設定
 
@@ -920,3 +930,144 @@ npm install lucide-react-native
 - デプロイメント設定
 - プッシュ通知の実装
 - ソーシャルログイ
+
+## 10. 追加の構築ノウハウと注意点（2025-09-17 更新）
+
+このセクションでは、Expo SDK 54 + NativeWind + Gluestack UI v2 環境で発生しやすいポイントと、今回の検証で安定動作を確認した設定をまとめます。既存の手順を置き換えるものではなく、補足とベストプラクティス集です。
+
+### 10.1 バージョン前提（今回の確定動作構成）
+- Expo SDK: 54
+- React Native: 0.81.x（Hermes）
+- React: 19
+- nativewind: 4.2.x
+- tailwindcss: 3.4.x
+- react-native-css-interop: 0.2.1（重要：単一バージョンに統一）
+
+### 10.2 CLI の使い方（ローカル優先）
+- グローバル CLI のインストールは必須ではありません。`npx` で実行する運用を推奨します。
+  - 例: `npx expo start`, `npx expo install`, `npx expo run:ios`
+- 既にグローバル CLI を入れていても問題はありませんが、バージョン差異による不整合を避けるため、プロジェクト内では原則 `npx` を使う方が安全です。
+
+### 10.3 Babel 設定（JSX を css-interop 経由に）
+`babel.config.js` のポイント:
+- presets に `babel-preset-expo` と `react-native-css-interop/babel` を指定する。
+- plugins に `@babel/plugin-transform-react-jsx` を追加し、`importSource` を `react-native-css-interop` に設定する（JSX が css-interop ランタイムを使うように）。
+- Reanimated のプラグインは `react-native-worklets/plugin` を推奨（Expo SDK 54 互換・警告低減）。
+
+参考（概念図）：
+```js
+presets: [
+  'babel-preset-expo',
+  'react-native-css-interop/babel',
+],
+plugins: [
+  ['@babel/plugin-transform-react-jsx', { runtime: 'automatic', importSource: 'react-native-css-interop' }],
+  'react-native-worklets/plugin',
+  // 必要なら module-resolver など
+]
+```
+
+注意: `nativewind/babel` は「preset」であり、plugins に入れるとエラー原因になります（`.plugins is not a valid Plugin property` など）。css-interop の preset が nativewind 連携を担うため、`plugins` に入れないでください。
+
+### 10.4 Metro 設定（withNativeWind）
+`metro.config.js` は nativewind 公式のラッパーを使用します。
+
+```js
+const { getDefaultConfig } = require('@expo/metro-config');
+const { withNativeWind } = require('nativewind/metro');
+
+const config = getDefaultConfig(__dirname);
+
+module.exports = withNativeWind(config, { input: './global.css' });
+```
+
+グローバルスタイルの入口として `global.css` を参照します（Tailwind の `@tailwind` ディレクティブ等を記述）。
+
+### 10.5 TypeScript 設定
+`tsconfig.json` の要点:
+- `extends`: `expo/tsconfig.base.json`
+- `jsx`: `react-jsx`
+- `esModuleInterop`: true / `allowSyntheticDefaultImports`: true
+- 必要に応じてパスエイリアス（`@/*`, `src/*`, `app/*` など）
+
+### 10.6 Tailwind 設定
+`tailwind.config.js` のポイント（本リポジトリの現行設定を踏襲）:
+- `darkMode: 'class'`
+- `presets: [require('nativewind/preset')]`
+- Gluestack UI のユーティリティプラグインを追加
+- `content` に以下を含める（未列挙のディレクトリを使う場合は随時追加）
+  - `./App.{tsx,jsx,ts,js}`
+  - `./index.{tsx,jsx,ts,js}`
+  - `./components/**/*.{tsx,jsx,ts,js}`
+  - `./src/screens/**/*.{tsx,jsx,ts,js}`
+  - `./node_modules/@gluestack-ui/**/*.{js,ts,jsx,tsx}`
+
+### 10.7 依存の統一（react-native-css-interop を 0.2.1 に固定）
+nativewind 4.x は `react-native-css-interop` の 0.2.x 系を要求します。ルートに 0.1.x が残っていると、`node_modules/nativewind/node_modules/` 配下に 0.2.x が重複インストールされ、Babel/Metro/ランタイムの参照先がズレてスタイルが効かなくなることがあります。
+
+対策として、`package.json` に npm の `overrides` を設定し、単一バージョンに固定してください。
+
+```jsonc
+{
+  "overrides": {
+    "react-native-css-interop": "0.2.1"
+  }
+}
+```
+
+その上でクリーンインストール：
+
+```bash
+rm -rf node_modules package-lock.json
+npm install
+```
+
+バージョン確認（重複がないことをチェック）:
+
+```bash
+node -e "console.log('root', require('./node_modules/react-native-css-interop/package.json').version); try{console.log('nativewind nested', require('./node_modules/nativewind/node_modules/react-native-css-interop/package.json').version)}catch(e){console.log('nativewind nested', 'N/A')}"
+```
+
+`nativewind nested: N/A` であれば OK です。
+
+補足: 2 系統が入った背景は「semver 範囲の不一致」によるものです。ルートに 0.1.x が固定された状態で nativewind が 0.2.x を要求すると、npm はネスト配置を作るため、変換チェーンが不整合になります。
+
+### 10.8 iOS シミュレータでの起動が不安定な場合の対処
+- Expo を localhost で起動する（URL ハンドラ絡みのエラー回避に有効）
+  - `npx expo start --host=localhost -c`
+- Expo Go の起動がうまくいかない場合は Development Build を利用（Expo Go 非依存）
+  - `npx expo run:ios`
+- シミュレータ関連のリセット
+  - すべてのシミュレータを終了 → 「Device」>「Erase All Content and Settings」相当を実行（または `xcrun simctl erase all`）
+  - 必要に応じて `open -a Simulator` で再起動
+- Watchman の再スキャンや Metro キャッシュクリアも効果的
+  - `npx expo start -c`（Metro/haste キャッシュクリア）
+
+よくあるエラー例:
+- `LSApplicationWorkspaceErrorDomain error 115`（URL オープン失敗）
+  - localhost での起動／Development Build で回避できるケースが多いです。
+
+### 10.9 簡易スモークテスト（NativeWind の有効性確認）
+一時的に `App.tsx` に以下のような要素を置いて、スタイル適用を目視確認します。
+
+```tsx
+<View className="flex-1 items-center justify-center bg-indigo-600">
+  <Text className="text-white text-lg">NativeWind OK</Text>
+  {/* 既存のプロバイダー・ナビゲーションは後で戻す */}
+</View>
+```
+
+表示が期待どおり（背景 indigo、文字白、サイズ大）になれば、Babel/Metro/ランタイムが正しく連携しています。
+
+### 10.10 運用チェックリスト（再掲）
+- コマンドは `npx` を優先（グローバル CLI に依存しない）
+- `react-native-css-interop` は 0.2.1 に固定し、重複インストールを回避
+- Babel: `react-native-css-interop/babel` を preset に、JSX の `importSource` を `react-native-css-interop` に
+- Metro: `withNativeWind(config, { input: './global.css' })`
+- Tailwind: content に自分のソースと `@gluestack-ui` を含める
+- TS: `expo/tsconfig.base.json` を継承し `react-jsx` 等を設定
+- 問題発生時は Metro キャッシュクリアとシミュレータ/Watchman のリセットを優先
+
+---
+
+この追記は、現在の本リポジトリの設定（Expo 54 + NativeWind 4）での検証結果に基づくものです。将来のバージョンアップで仕様が変わる場合があります。アップグレード時は、まず `overrides` の有無と `tailwind.config.js`/`babel.config.js`/`metro.config.js` の差分確認から着手することを推奨します。

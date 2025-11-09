@@ -30,7 +30,11 @@ export default {
     web: { favicon: "./assets/favicon.png" },
     extra: {
       supabaseUrl: process.env.EXPO_PUBLIC_SUPABASE_URL,
-      supabaseAnonKey: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY
+      supabaseAnonKey: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY,
+      // Storage bucket name can be configured via env, defaults to 'images'
+      supabaseBucket: process.env.EXPO_PUBLIC_SUPABASE_BUCKET ?? 'images',
+      supabaseImageBucket: process.env.EXPO_PUBLIC_SUPABASE_IMAGE_BUCKET ?? 'images',
+      supabaseAudioBucket: process.env.EXPO_PUBLIC_SUPABASE_AUDIO_BUCKET ?? 'audio'
     }
   }
 };

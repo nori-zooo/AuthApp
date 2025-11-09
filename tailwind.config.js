@@ -5,12 +5,12 @@ module.exports = {
   //darkMode: "media",
   darkMode: "class",
   content: [
-    "App.{tsx,jsx,ts,js}",
-    "index.{tsx,jsx,ts,js}",
-    "components/**/*.{tsx,jsx,ts,js}",
-    "src/screens/**/*.{tsx,jsx,ts,js}",
+    "./App.{tsx,jsx,ts,js}",
+    "./index.{tsx,jsx,ts,js}",
+    "./components/**/*.{tsx,jsx,ts,js}",
+    "./src/screens/**/*.{tsx,jsx,ts,js}",
     // gluestack-ui を含める
-    "node_modules/@gluestack-ui/**/*.{js,ts,jsx,tsx}"
+    "./node_modules/@gluestack-ui/**/*.{js,ts,jsx,tsx}"
   ],
   presets: [require('nativewind/preset')],
   plugins: [
