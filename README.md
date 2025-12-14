@@ -103,7 +103,7 @@ React Native ＋ Expo　を用いたモバイルアプリで、
 
 
 ## 画面イメージ
-<img src="docs/expo_demo.gif" width="300" />
+<img src="docs/demo.gif" width="300" />
 
 
 ## アーキテクチャ概要
