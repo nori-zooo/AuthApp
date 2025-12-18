@@ -16,7 +16,7 @@ export default function AppsListScreen() {
         onPress={() => navigation.navigate('MapScreen')}
         className="flex-row items-center justify-between w-full px-4 mt-4 bg-blue-200 border border-navy-800"
       >
-        <ButtonText className="flex-1 text-lg text-left text-blue-600">🗺️マップ画面に移動</ButtonText>
+        <ButtonText className="flex-1 text-lg text-left text-blue-600">🗺️マップで住所検索</ButtonText>
         <Text className="ml-4 text-lg text-blue-600">{'>'}</Text>
       </Button>
 
@@ -32,7 +32,7 @@ export default function AppsListScreen() {
         onPress={() => navigation.navigate('ImageUploadScreen')}
         className="flex-row items-center justify-between w-full px-4 mt-4 bg-blue-200 border border-navy-800"
       >
-        <ButtonText className="flex-1 text-lg text-left text-blue-600">🖌️画像アップロード</ButtonText>
+        <ButtonText className="flex-1 text-lg text-left text-blue-600">🖌️AI数学の先生（画像解析）</ButtonText>
         <Text className="ml-4 text-lg text-blue-600">{'>'}</Text>
       </Button>
 
@@ -40,7 +40,7 @@ export default function AppsListScreen() {
         onPress={() => navigation.navigate('MusicUploadScreen')}
         className="flex-row items-center justify-between w-full px-4 mt-4 bg-blue-200 border border-navy-800"
       >
-        <ButtonText className="flex-1 text-lg text-left text-blue-600">♪音声アップロード</ButtonText>
+        <ButtonText className="flex-1 text-lg text-left text-blue-600">♪AI音楽の先生（音声ファイル解析）</ButtonText>
         <Text className="ml-4 text-lg text-blue-600">{'>'}</Text>
       </Button>
 
