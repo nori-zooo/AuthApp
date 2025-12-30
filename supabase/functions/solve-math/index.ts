@@ -24,13 +24,50 @@ const corsHeaders = {
 };
 
 function buildPrompt(locale: string) {
-  return `あなたは優秀な数学解説者です。画像に写っている数学の問題を読み取り、以下のJSON形式で日本語で返してください。
+  return `あなたは優秀な数学解説者です。画像に写っている数学の問題を読み取り、以下のJSON形式“のみ”で日本語で返してください。
 {
   "answer": "最終的な答え（数値や式）",
   "explanation": "要点を押さえた分かりやすい解説（200-400字程度）",
   "steps": ["主要な解法ステップを順番に"]
 }
+重要な制約:
+- Markdown記法を使わない（#, *, -, >, コードブロック などを出力しない）
+- LaTeX/TeX記法を使わない（$, \\frac, \\sqrt, \\circ, ^{...} などを出力しない）
+- 数式はプレーンテキストで書く（例: x^2, (a+b)/c, 30° など。必要ならUnicode記号はOK）
+- JSON以外の文章・前置き・挨拶・コードブロックは一切書かない
 注意: 数式はできるだけ簡潔に。不要な前置きは書かない。`;
+}
+
+function sanitizeMathPlainText(input: string): string {
+  if (!input) return '';
+  let s = String(input);
+
+  s = s.replace(/```[\s\S]*?```/g, ' ');
+  s = s.replace(/`([^`]+)`/g, '$1');
+  s = s.replace(/\$+/g, '');
+  s = s.replace(/\\\(|\\\)|\\\[|\\\]/g, '');
+
+  s = s.replace(/^\s{0,3}#{1,6}\s+/gm, '');
+    s = s.replace(/^\s*-\s+(?=\d)/gm, '-');
+    s = s.replace(/^\s*\+\s+(?=\d)/gm, '+');
+  s = s.replace(/^\s{0,3}(?:[-*+]\s+|\d+\.)\s+/gm, '');
+  s = s.replace(/^\s*>\s?/gm, '');
+  s = s.replace(/\*\*([^*]+)\*\*/g, '$1');
+  s = s.replace(/\*([^*]+)\*/g, '$1');
+  s = s.replace(/__([^_]+)__/g, '$1');
+  s = s.replace(/_([^_]+)_/g, '$1');
+
+  s = s.replace(/\\frac\s*\{([^}]*)\}\s*\{([^}]*)\}/g, '($1)/($2)');
+  s = s.replace(/\\sqrt\s*\{([^}]*)\}/g, 'sqrt($1)');
+  s = s.replace(/\^\\circ/g, '°');
+  s = s.replace(/\\circ/g, '°');
+  s = s.replace(/\\([A-Za-z]+)/g, '$1');
+  s = s.replace(/[{}]/g, '');
+
+  s = s.replace(/\r\n/g, '\n');
+  s = s.replace(/\n{3,}/g, '\n\n');
+  s = s.replace(/[ \t]{2,}/g, ' ');
+  return s.trim();
 }
 
 async function callGemini(imageUrl: string, locale = 'ja') {
@@ -124,9 +161,14 @@ async function callGemini(imageUrl: string, locale = 'ja') {
     const lastBrace = text.lastIndexOf('}');
     const jsonText = firstBrace >= 0 && lastBrace > firstBrace ? text.slice(firstBrace, lastBrace + 1) : text;
     const parsed = JSON.parse(jsonText);
-    return parsed;
+    const answer = sanitizeMathPlainText(String(parsed?.answer ?? ''));
+    const explanation = sanitizeMathPlainText(String(parsed?.explanation ?? ''));
+    const steps = Array.isArray(parsed?.steps)
+      ? parsed.steps.map((x: any) => sanitizeMathPlainText(String(x ?? ''))).filter(Boolean).slice(0, 8)
+      : [];
+    return { ...parsed, answer, explanation, steps: steps.length ? steps : undefined };
   } catch {
-    return { answer: '', explanation: text };
+    return { answer: '', explanation: sanitizeMathPlainText(text) };
   }
 }
 

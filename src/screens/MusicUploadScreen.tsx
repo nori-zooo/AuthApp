@@ -8,8 +8,14 @@ import { Button, ButtonText } from '@/components/ui/button';
 import { Input, InputField } from '@/components/ui/input';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
-import { Audio } from 'expo-av';
-import type { AVPlaybackStatus } from 'expo-av';
+import {
+  AudioModule,
+  RecordingPresets,
+  createAudioPlayer,
+  setAudioModeAsync,
+  useAudioRecorder,
+  useAudioRecorderState,
+} from 'expo-audio';
 import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY } from '@/src/lib/supabase';
 import { useAuth } from '@/src/contexts/AuthContext';
 import Constants from 'expo-constants';
@@ -106,9 +112,17 @@ export default function MusicUploadScreen() {
   const [uploading, setUploading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [items, setItems] = useState<Item[]>([]);
-  const recordingRef = useRef<Audio.Recording | null>(null);
-  const playbackRef = useRef<Audio.Sound | null>(null);
-  const listPlaybackRef = useRef<Audio.Sound | null>(null);
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recorderState = useAudioRecorderState(recorder, 200);
+
+  const playbackRef = useRef<ReturnType<typeof createAudioPlayer> | null>(null);
+  const playbackSubscriptionRef = useRef<{ remove: () => void } | null>(null);
+  const playbackSourceRef = useRef<string>('');
+  const playbackStatusRef = useRef<any>(null);
+
+  const listPlaybackRef = useRef<ReturnType<typeof createAudioPlayer> | null>(null);
+  const listPlaybackSubscriptionRef = useRef<{ remove: () => void } | null>(null);
+  const listPlaybackStatusRef = useRef<any>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingDuration, setRecordingDuration] = useState(0);
   const [recordedUri, setRecordedUri] = useState<string | null>(null);
@@ -125,7 +139,32 @@ export default function MusicUploadScreen() {
   const [summaryErrors, setSummaryErrors] = useState<Record<string, string>>({});
   const [summarizingKey, setSummarizingKey] = useState<string | null>(null);
 
+  function setStatus(text: string, detail?: unknown) {
+    setMessage(text);
+    if (typeof __DEV__ !== 'undefined' && __DEV__ && typeof detail !== 'undefined') {
+      console.warn('[music-upload]', text, detail);
+    }
+  }
+
+  function setStatusOnce(text: string, detail?: unknown) {
+    setMessage((prev) => prev ?? text);
+    if (typeof __DEV__ !== 'undefined' && __DEV__ && typeof detail !== 'undefined') {
+      console.warn('[music-upload]', text, detail);
+    }
+  }
+
   const canUpload = !!user && !!audioUri && !!fileName.trim();
+
+  useEffect(() => {
+    if (recorderState?.isRecording) {
+      setIsRecording(true);
+      if (typeof recorderState.durationMillis === 'number') {
+        setRecordingDuration(recorderState.durationMillis);
+      }
+    } else {
+      setIsRecording(false);
+    }
+  }, [recorderState?.isRecording, recorderState?.durationMillis]);
 
   useEffect(() => {
     refreshList();
@@ -134,47 +173,59 @@ export default function MusicUploadScreen() {
 
   useEffect(() => {
     return () => {
-      if (recordingRef.current) {
-        try {
-          recordingRef.current.stopAndUnloadAsync();
-        } catch {
-          /* noop */
+      try {
+        if (recorderState?.isRecording) {
+          recorder.stop().catch(() => {});
         }
-        recordingRef.current = null;
+      } catch {
+        /* noop */
       }
       releasePlayback().catch(() => {});
       stopListPlayback().catch(() => {});
     };
-  }, []);
+  }, [recorder, recorderState?.isRecording]);
 
   async function stopListPlayback() {
     const current = listPlaybackRef.current;
+    const sub = listPlaybackSubscriptionRef.current;
     listPlaybackRef.current = null;
+    listPlaybackSubscriptionRef.current = null;
+    listPlaybackStatusRef.current = null;
     setIsListPlaybackPlaying(false);
     setListPlaybackKey(null);
     if (!current) return;
     try {
-      await current.stopAsync();
+      current.pause();
     } catch {
       /* noop */
     }
     try {
-      await current.unloadAsync();
+      await current.seekTo(0);
+    } catch {
+      /* noop */
+    }
+    try {
+      sub?.remove();
+    } catch {
+      /* noop */
+    }
+    try {
+      current.remove();
     } catch {
       /* noop */
     }
   }
 
-  function handleListPlaybackStatusUpdate(status: AVPlaybackStatus) {
-    if (!status.isLoaded) {
-      if ('error' in status && status.error) {
-        setMessage((prev) => prev ?? `再生エラー: ${status.error}`);
+  function handleListPlaybackStatusUpdate(status: any) {
+    if (!status?.isLoaded) {
+      if (status?.error) {
+        setStatusOnce('再生エラー', status.error);
       }
       setIsListPlaybackPlaying(false);
       return;
     }
 
-    setIsListPlaybackPlaying(status.isPlaying ?? false);
+    setIsListPlaybackPlaying(status.playing ?? false);
 
     if (status.didJustFinish) {
       setIsListPlaybackPlaying(false);
@@ -184,7 +235,7 @@ export default function MusicUploadScreen() {
   }
 
   async function resolveItemUrl(item: Item): Promise<string> {
-    if (item.url) return item.url;
+    // 署名URLは短時間で失効するため、キャッシュせず毎回発行する。
     try {
       const { data, error } = await supabase.storage.from(bucket).createSignedUrl(item.key, 300);
       if (error) throw error;
@@ -209,27 +260,31 @@ export default function MusicUploadScreen() {
 
       const playbackUrl = await resolveItemUrl(item);
 
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
-        shouldDuckAndroid: true,
+      await setAudioModeAsync({
+        playsInSilentMode: true,
+        allowsRecording: false,
       });
 
-      const { sound } = await Audio.Sound.createAsync(
+      const player = createAudioPlayer(
         { uri: playbackUrl },
-        { shouldPlay: true },
-        handleListPlaybackStatusUpdate
+        {
+          updateInterval: 250,
+          downloadFirst: false,
+        }
       );
+      listPlaybackRef.current = player;
+      listPlaybackSubscriptionRef.current = player.addListener('playbackStatusUpdate', (status: any) => {
+        listPlaybackStatusRef.current = status;
+        handleListPlaybackStatusUpdate(status);
+      });
 
-      listPlaybackRef.current = sound;
-      sound.setOnPlaybackStatusUpdate(handleListPlaybackStatusUpdate);
+      player.play();
       setListPlaybackKey(item.key);
       setIsListPlaybackPlaying(true);
     } catch (error) {
       await stopListPlayback().catch(() => {});
       setListPlaybackKey(null);
-      setMessage(`一覧の再生に失敗しました: ${String((error as Error)?.message ?? error)}`);
+      setStatus('再生に失敗しました。', error);
     }
   }
 
@@ -427,7 +482,7 @@ export default function MusicUploadScreen() {
         return next;
       });
     } catch (e: any) {
-      setMessage(`一覧取得に失敗: ${e?.message ?? String(e)}`);
+      setStatus('一覧取得に失敗しました。', e);
     }
   }
 
@@ -454,7 +509,7 @@ export default function MusicUploadScreen() {
         : (pickerResult as unknown as { uri: string; name?: string });
 
       if (!asset?.uri) {
-        setMessage('音声ファイルの取得に失敗しました。再度お試しください。');
+        setStatus('音声ファイルの取得に失敗しました。');
         return;
       }
 
@@ -465,7 +520,7 @@ export default function MusicUploadScreen() {
       const fromUri = asset.name || asset.uri.split('/').pop() || `audio-${Date.now()}.mp3`;
       setFileName(fromUri);
     } catch (error) {
-      setMessage(`音声ファイルの選択に失敗しました: ${String((error as Error)?.message ?? error)}`);
+      setStatus('音声ファイルの選択に失敗しました。', error);
     }
   }
 
@@ -478,69 +533,58 @@ export default function MusicUploadScreen() {
     try {
       await stopListPlayback();
       await releasePlayback();
-      const permission = await Audio.requestPermissionsAsync();
+      const permission = await AudioModule.requestRecordingPermissionsAsync();
       if (!permission.granted) {
-        setMessage('マイクへのアクセス許可が必要です。設定から有効にしてください。');
+        setStatus('マイクの許可が必要です。');
         return;
       }
 
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
-        shouldDuckAndroid: true,
+      await setAudioModeAsync({
+        playsInSilentMode: true,
+        allowsRecording: true,
       });
 
-      const recording = new Audio.Recording();
-      await recording.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
-      recording.setOnRecordingStatusUpdate((status) => {
-        if (!status) return;
-        if (status.canRecord) {
-          setRecordingDuration(status.durationMillis ?? 0);
-        }
-      });
-      recording.setProgressUpdateInterval(200);
-      await recording.startAsync();
+      await recorder.prepareToRecordAsync();
+      recorder.record();
 
-      recordingRef.current = recording;
       setIsRecording(true);
       setRecordingDuration(0);
       setRecordedUri(null);
       setRecordedName(null);
-      setMessage('録音を開始しました。停止するには「録音停止」をタップしてください。');
+      setStatus('録音開始');
     } catch (error) {
-      setMessage(`録音開始に失敗しました: ${String((error as Error)?.message ?? error)}`);
+      setStatus('録音開始に失敗しました。', error);
       setIsRecording(false);
     }
   }
 
   async function stopRecording() {
-    const recording = recordingRef.current;
-    if (!recording) {
-      setIsRecording(false);
-      return;
-    }
     try {
-      await recording.stopAndUnloadAsync();
+      await recorder.stop();
     } catch (error) {
-      setMessage(`録音の停止に失敗しました: ${String((error as Error)?.message ?? error)}`);
+      setStatus('録音停止に失敗しました。', error);
     }
     try {
-      const status = await recording.getStatusAsync();
-      if (status && 'durationMillis' in status && typeof status.durationMillis === 'number') {
-        setRecordingDuration(status.durationMillis);
-      }
+      const status = recorder.getStatus?.();
+      if (status && typeof status.durationMillis === 'number') setRecordingDuration(status.durationMillis);
     } catch {
       /* noop */
     }
     try {
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
+      await setAudioModeAsync({ allowsRecording: false });
     } catch {
       /* noop */
     }
 
-    const uri = recording.getURI();
-    recordingRef.current = null;
+    const status = (() => {
+      try {
+        return recorder.getStatus?.();
+      } catch {
+        return null;
+      }
+    })();
+    const uri = (recorder as any)?.uri ?? status?.url ?? null;
+
     setIsRecording(false);
 
     if (uri) {
@@ -549,9 +593,9 @@ export default function MusicUploadScreen() {
       const stamped = `recording-${new Date().toISOString().replace(/[:.]/g, '-')}.m4a`;
       setRecordedUri(uri);
       setRecordedName(stamped);
-      setMessage('録音が完了しました。「録音をアップロードに利用」をタップすると選択されます。');
+      setStatus('録音完了');
     } else {
-      setMessage('録音データを取得できませんでした。もう一度お試しください。');
+      setStatus('録音データを取得できませんでした。');
     }
   }
 
@@ -566,7 +610,7 @@ export default function MusicUploadScreen() {
     setPickedBase64(null);
     const name = recordedName || recordedUri.split('/').pop() || `recording-${Date.now()}.m4a`;
     setFileName(name);
-    setMessage('録音ファイルをアップロード対象に設定しました。');
+    setStatus('録音を選択しました。');
   }
 
   function resetPlaybackState() {
@@ -575,36 +619,35 @@ export default function MusicUploadScreen() {
     setPreviewDuration(0);
   }
 
-  const handlePlaybackStatusUpdate = (status: AVPlaybackStatus) => {
-    if (!status.isLoaded) {
-      if ('error' in status && status.error) {
-        setMessage((prev) => prev ?? `再生エラー: ${status.error}`);
-      }
-      return;
-    }
-    setPreviewPosition(status.positionMillis ?? 0);
-    setPreviewDuration(status.durationMillis ?? 0);
-    setIsPlayingPreview(status.isPlaying ?? false);
-    if (status.didJustFinish) {
-      setIsPlayingPreview(false);
-    }
-  };
-
   async function releasePlayback() {
-    const sound = playbackRef.current;
-    if (!sound) {
+    const player = playbackRef.current;
+    const sub = playbackSubscriptionRef.current;
+    playbackRef.current = null;
+    playbackSubscriptionRef.current = null;
+    playbackSourceRef.current = '';
+    playbackStatusRef.current = null;
+
+    if (!player) {
       resetPlaybackState();
       return;
     }
-
-    playbackRef.current = null;
     try {
-      await sound.stopAsync();
+      player.pause();
     } catch {
       /* noop */
     }
     try {
-      await sound.unloadAsync();
+      await player.seekTo(0);
+    } catch {
+      /* noop */
+    }
+    try {
+      sub?.remove();
+    } catch {
+      /* noop */
+    }
+    try {
+      player.remove();
     } catch {
       /* noop */
     }
@@ -619,52 +662,61 @@ export default function MusicUploadScreen() {
 
     try {
       await stopListPlayback();
-      const existing = playbackRef.current;
-
-      if (existing) {
-        const status = await existing.getStatusAsync();
-        if (!status.isLoaded) {
-          await releasePlayback();
-        } else if (status.isPlaying) {
-          await existing.pauseAsync();
-          setIsPlayingPreview(false);
-          return;
-        } else {
-          await Audio.setAudioModeAsync({
-            allowsRecordingIOS: false,
-            playsInSilentModeIOS: true,
-            staysActiveInBackground: false,
-            shouldDuckAndroid: true,
-          });
-
-          if ((status.positionMillis ?? 0) >= (status.durationMillis ?? 0)) {
-            await existing.playFromPositionAsync(0);
-          } else {
-            await existing.playAsync();
-          }
-          setIsPlayingPreview(true);
-          return;
-        }
-      }
-
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
-        shouldDuckAndroid: true,
+      await setAudioModeAsync({
+        playsInSilentMode: true,
+        allowsRecording: false,
       });
 
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: recordedUri },
-        { shouldPlay: true },
-        handlePlaybackStatusUpdate
-      );
+      const existing = playbackRef.current;
+      const lastStatus = playbackStatusRef.current;
+      const isSameSource = playbackSourceRef.current === recordedUri;
 
-      playbackRef.current = sound;
-      sound.setOnPlaybackStatusUpdate(handlePlaybackStatusUpdate);
+      if (existing && isSameSource) {
+        if (isPlayingPreview) {
+          existing.pause();
+          setIsPlayingPreview(false);
+          return;
+        }
+
+        const currentSeconds = typeof lastStatus?.currentTime === 'number' ? lastStatus.currentTime : 0;
+        const durationSeconds = typeof lastStatus?.duration === 'number' ? lastStatus.duration : 0;
+        if (durationSeconds > 0 && currentSeconds >= durationSeconds) {
+          await existing.seekTo(0);
+        }
+        existing.play();
+        setIsPlayingPreview(true);
+        return;
+      }
+
+      await releasePlayback();
+
+      const player = createAudioPlayer(
+        { uri: recordedUri },
+        {
+          updateInterval: 200,
+          downloadFirst: false,
+        }
+      );
+      playbackSourceRef.current = recordedUri;
+      playbackRef.current = player;
+      playbackSubscriptionRef.current = player.addListener('playbackStatusUpdate', (status: any) => {
+        playbackStatusRef.current = status;
+        if (!status?.isLoaded) {
+          if (status?.error) setStatusOnce('再生エラー', status.error);
+          return;
+        }
+        const positionMillis = typeof status.currentTime === 'number' ? Math.floor(status.currentTime * 1000) : 0;
+        const durationMillis = typeof status.duration === 'number' ? Math.floor(status.duration * 1000) : 0;
+        setPreviewPosition(positionMillis);
+        setPreviewDuration(durationMillis);
+        setIsPlayingPreview(Boolean(status.playing));
+        if (status.didJustFinish) setIsPlayingPreview(false);
+      });
+
+      player.play();
       setIsPlayingPreview(true);
     } catch (error) {
-      setMessage(`録音の再生に失敗しました: ${String((error as Error)?.message ?? error)}`);
+      setStatus('再生に失敗しました。', error);
       await releasePlayback();
     }
   }
@@ -804,10 +856,11 @@ export default function MusicUploadScreen() {
       }
 
       const { data } = supabase.storage.from(bucket).getPublicUrl(computedPath || filePath);
-      const successMessage = metadataWarning
-        ? `アップロード成功: ${data.publicUrl}\n${metadataWarning}`
-        : `アップロード成功: ${data.publicUrl}`;
-      setMessage(successMessage);
+      setStatus(metadataWarning ? 'アップロード成功（履歴未保存）' : 'アップロード成功', {
+        publicUrl: data.publicUrl,
+        metadataWarning,
+        path: computedPath || filePath,
+      });
       await refreshList();
       await stopListPlayback();
       await releasePlayback();
@@ -818,14 +871,13 @@ export default function MusicUploadScreen() {
       setRecordingDuration(0);
     } catch (e: any) {
       if (e?.message?.includes('Bucket not found')) {
-        setMessage(`アップロード失敗: 指定されたバケット '${bucket}' が見つかりません。Supabase の Storage でバケットを作成し、公開設定を確認してください。`);
+        setStatus('アップロード失敗（バケット未作成）', { bucket, error: e, computedPath });
       } else if (e?.message?.includes('The resource already exists') || e?.statusCode === '409') {
-        setMessage('アップロード失敗: 同名のファイルが既に存在します。別のファイル名に変更してください。');
+        setStatus('アップロード失敗（同名ファイル）', { error: e, computedPath });
       } else if (e?.message?.includes('not supported')) {
-        setMessage('アップロード失敗: このバケットで許可されていない MIME タイプです。Supabase Storage のバケット設定で音声ファイル (例: audio/mp4, audio/mpeg) を allowed_mime_types に追加してください。');
+        setStatus('アップロード失敗（許可されていない形式）', { error: e, computedPath });
       } else {
-        const extra = computedPath ? ` (path: ${computedPath})` : '';
-        setMessage(`アップロード失敗: ${e?.message ?? String(e)}${extra}`);
+        setStatus('アップロード失敗', { error: e, computedPath });
       }
     } finally {
       setUploading(false);
@@ -872,7 +924,7 @@ export default function MusicUploadScreen() {
       }
       await refreshList();
     } catch (e: any) {
-      setMessage(`削除に失敗: ${e?.message ?? String(e)}`);
+      setStatus('削除に失敗しました。', e);
     }
   }
 

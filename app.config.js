@@ -21,6 +21,14 @@ export default {
     },
     assetBundlePatterns: ["**/*"],
     ios: { supportsTablet: true },
+    plugins: [
+      [
+        "expo-audio",
+        {
+          microphonePermission: "AuthApp がマイクにアクセスすることを許可しますか？",
+        },
+      ],
+    ],
     android: {
       adaptiveIcon: {
         foregroundImage: "./assets/adaptive-icon.png",

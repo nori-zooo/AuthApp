@@ -33,7 +33,96 @@ const cors = {
 };
 
 function buildPrompt(locale: string) {
-  return `あなたは優秀な数学解説者です。画像に写っている数学の問題を読み取り、日本語で簡潔に答えと根拠を述べてください。`;
+  // NOTE: 表示側での置換や場当たり的な整形を増やさないため、
+  //       ここで「読みやすい日本語プレーンテキスト + 構造化(JSON)」を強制する。
+  //       LaTeX/Markdown を出させないのが根本対策。
+  return `あなたは優秀な数学解説者です。画像に写っている数学の問題を読み取り、必ず次のJSON形式“のみ”で日本語で返してください。
+
+出力JSONスキーマ:
+{
+  "answer": "最終的な答え（数値や式。可能なら=で完結させる）",
+  "explanation": "要点を押さえた分かりやすい解説（2〜6文。結論→根拠の順）",
+  "steps": ["解法ステップを順番に（最大8個）"]
+}
+
+重要な制約:
+- Markdown記法を使わない（#, *, -, >, コードブロック などを出力しない）
+- LaTeX/TeX記法を使わない（$, \\frac, \\sqrt, \\circ, ^{...} などを出力しない）
+- 数式はプレーンテキストで書く（例: x^2, (a+b)/c, 30° など。必要ならUnicode記号はOK）
+- JSON以外の文章・前置き・挨拶・コードブロックは一切書かない
+`;
+}
+
+function sanitizeMathPlainText(input: string): string {
+  if (!input) return '';
+  let s = String(input);
+
+  // まずはよくあるラッパ/区切りを除去
+  s = s.replace(/```[\s\S]*?```/g, ' ');
+  s = s.replace(/`([^`]+)`/g, '$1');
+  s = s.replace(/\$+/g, '');
+  s = s.replace(/\\\(|\\\)|\\\[|\\\]/g, '');
+
+  // Markdown っぽい装飾の除去（プレーンに寄せる）
+  s = s.replace(/^\s{0,3}#{1,6}\s+/gm, '');
+  // 先頭の符号が「- 3」のように空白を挟むケースは、箇条書き除去で消えないように詰める
+  s = s.replace(/^\s*-\s+(?=\d)/gm, '-');
+  s = s.replace(/^\s*\+\s+(?=\d)/gm, '+');
+  s = s.replace(/^\s{0,3}(?:[-*+]\s+|\d+\.)\s+/gm, '');
+  s = s.replace(/^\s*>\s?/gm, '');
+  s = s.replace(/\*\*([^*]+)\*\*/g, '$1');
+  s = s.replace(/\*([^*]+)\*/g, '$1');
+  s = s.replace(/__([^_]+)__/g, '$1');
+  s = s.replace(/_([^_]+)_/g, '$1');
+
+  // LaTeX の代表的な構文を“意味を壊しにくい”形で崩す（個別置換を増やさない方針）
+  // \frac{a}{b} -> (a)/(b)
+  s = s.replace(/\\frac\s*\{([^}]*)\}\s*\{([^}]*)\}/g, '($1)/($2)');
+  // \sqrt{a} -> sqrt(a)
+  s = s.replace(/\\sqrt\s*\{([^}]*)\}/g, 'sqrt($1)');
+  // 度記号
+  s = s.replace(/\^\\circ/g, '°');
+  s = s.replace(/\\circ/g, '°');
+
+  // 残ったバックスラッシュコマンドは除去（例: \pi -> pi）
+  s = s.replace(/\\([A-Za-z]+)/g, '$1');
+  // 残った波括弧は外す（TeX由来）
+  s = s.replace(/[{}]/g, '');
+
+  // 空白整形
+  s = s.replace(/\r\n/g, '\n');
+  s = s.replace(/\n{3,}/g, '\n\n');
+  s = s.replace(/[ \t]{2,}/g, ' ');
+  return s.trim();
+}
+
+function extractJsonObjectFromText(text: string): any | null {
+  if (!text) return null;
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  const jsonText = text.slice(start, end + 1);
+  try {
+    return JSON.parse(jsonText);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeStructuredResult(value: any) {
+  // 期待: { answer, explanation, steps }
+  const answer = sanitizeMathPlainText(String(value?.answer ?? ''));
+  const explanation = sanitizeMathPlainText(String(value?.explanation ?? ''));
+  const stepsRaw = Array.isArray(value?.steps) ? value.steps : [];
+  const steps = stepsRaw
+    .map((x: any) => sanitizeMathPlainText(String(x ?? '')))
+    .filter(Boolean)
+    .slice(0, 8);
+  return {
+    answer,
+    explanation,
+    steps: steps.length ? steps : undefined,
+  };
 }
 
 function collectTextsFromCandidate(candidate: any): string[] {
@@ -88,12 +177,26 @@ function buildResultFromGeminiResponse(gjson: any) {
     }
   }
 
-  const explanation = texts.join('\n').trim();
+  const combinedText = texts.join('\n').trim();
+
+  // まずは「JSONのみ」出力を期待してパースする。失敗したら従来通りテキストから復元。
+  const parsedJson = extractJsonObjectFromText(combinedText);
+  if (parsedJson) {
+    const normalized = normalizeStructuredResult(parsedJson);
+    return {
+      ...normalized,
+      finishReason: finishReason ?? null,
+      promptFeedback: gjson?.promptFeedback ?? null,
+      candidatesCount: candidates.length,
+    };
+  }
+
+  const explanation = sanitizeMathPlainText(combinedText);
   let answer = '';
   if (explanation) {
     const ansMatch = explanation.match(/(?:答え|解答|Answer|Solution)\s*[:：]\s*(.+)/i);
     if (ansMatch && ansMatch[1]) {
-      answer = ansMatch[1].split(/\n|。/)[0].trim();
+      answer = sanitizeMathPlainText(ansMatch[1].split(/\n|。/)[0].trim());
     }
   }
 
@@ -101,8 +204,10 @@ function buildResultFromGeminiResponse(gjson: any) {
   if (explanation) {
     const lines = explanation.split(/\n+/);
     for (const line of lines) {
-      if (/^(?:\d+\.|\d+\)|・|\-|①|②|③|④|⑤)/.test(line.trim())) {
-        steps.push(line.trim());
+      const cleaned = sanitizeMathPlainText(line);
+      if (!cleaned) continue;
+      if (/^(?:\d+\.|\d+\)|・|\-|①|②|③|④|⑤)/.test(cleaned.trim())) {
+        steps.push(cleaned.trim());
       }
       if (steps.length >= 8) break;
     }
@@ -177,6 +282,11 @@ Deno.serve(async (req: Request) => {
                   ],
                 },
               ],
+              // Gemini に JSON で返すことを明示（サポートされない場合もあるのでパース側で吸収）
+              generationConfig: {
+                responseMimeType: 'application/json',
+                temperature: 0.2,
+              },
             } as any;
 
             const resolveModelName = (modelName: string) => {

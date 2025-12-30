@@ -62,7 +62,7 @@ React Native ＋ Expo　を用いたモバイルアプリで、
 - **expo-image-picker**: 画像選択
 - **expo-document-picker**: ファイル選択
 - **expo-file-system**: ファイルシステム操作
-- **expo-av**: 音声・動画再生
+- **expo-audio**: 音声録音・再生
 
 ### データ可視化・アニメーション
 - **Victory Native**: グラフ・チャート表示

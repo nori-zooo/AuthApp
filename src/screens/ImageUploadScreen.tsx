@@ -7,6 +7,7 @@ import { Text } from '@/components/ui/text';
 import { Button, ButtonText } from '@/components/ui/button';
 import { Input, InputField } from '@/components/ui/input';
 import * as ImagePicker from 'expo-image-picker';
+import * as MediaLibrary from 'expo-media-library';
 // Expo SDK 54: legacy FS API が安定（fallback 用に使用）
 import * as FileSystem from 'expo-file-system/legacy';
 import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY } from '@/src/lib/supabase';
@@ -23,6 +24,43 @@ const arrayBufferToBase64 = (ab: ArrayBuffer) => b64encode(ab);
 const IMAGE_SUBFOLDER = 'images';
 const guessContentType = (ext: string) =>
   ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+
+const formatAiMathTextForDisplay = (input: string): string => {
+  if (!input) return '';
+  let s = String(input).replace(/\r\n/g, '\n');
+
+  // NOTE: 生成結果の「読みやすさ」担保は Edge Function 側で行う（根本対策）。
+  // ここでは表示崩れを避けるための最小限の整形のみを実施する。
+  // 先頭のラベル重複（UI側で「解説:」を付けるため）を除去
+  s = s.replace(/^\s*(?:答え|解答|回答|解説)\s*[:：]\s*/u, '');
+
+  // 余分な空白/空行の整理
+  s = s.replace(/[ \t]+\n/g, '\n');
+  s = s.replace(/\n{3,}/g, '\n\n');
+  s = s.trim();
+  return s;
+};
+
+const firstNonEmptyLine = (text: string): string => {
+  const lines = String(text || '')
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+  return lines[0] || '';
+};
+
+const removeLeadingLineIfMatches = (text: string, lineToRemove: string): string => {
+  if (!text || !lineToRemove) return text;
+  const rawLines = String(text || '').replace(/\r\n/g, '\n').split('\n');
+  const idx = rawLines.findIndex((l) => l.trim().length > 0);
+  if (idx < 0) return text;
+  if (rawLines[idx].trim() === lineToRemove.trim()) {
+    const next = [...rawLines.slice(0, idx), ...rawLines.slice(idx + 1)].join('\n');
+    return next.replace(/\n{3,}/g, '\n\n').trim();
+  }
+  return text;
+};
 
 type Item = { key: string; url: string; displayName: string };
 type Analysis = { name: string; answer: string; explanation: string; steps?: string[] } | null;
@@ -125,7 +163,8 @@ export default function ImageUploadScreen() {
       }
       setItems(withUrls);
     } catch (e: any) {
-      setMessage(`一覧取得に失敗: ${e?.message ?? String(e)}`);
+      setMessage('一覧取得に失敗しました。');
+      console.error('[ImageUpload] refreshList failed', { bucket, folderPath, error: e });
     }
   }
 
@@ -151,9 +190,30 @@ export default function ImageUploadScreen() {
       const asset = result.assets[0];
       setImageUri(asset.uri);
       setPickedBase64(asset.base64 ?? null);
-      // 初期ファイル名候補
-      const fromUri = asset.fileName || asset.uri.split('/').pop() || `image-${Date.now()}.jpg`;
-      setFileName(fromUri);
+
+      // 初期ファイル名候補（iOS等では fileName が空になることがあるため assetId から解決を試みる）
+      let resolvedName = asset.fileName || '';
+      if (!resolvedName && (asset as any)?.assetId) {
+        try {
+          const { status: mlStatus } = await MediaLibrary.getPermissionsAsync();
+          if (mlStatus !== 'granted') {
+            await MediaLibrary.requestPermissionsAsync();
+          }
+          const { status: mlStatus2 } = await MediaLibrary.getPermissionsAsync();
+          if (mlStatus2 === 'granted') {
+            const info: any = await MediaLibrary.getAssetInfoAsync((asset as any).assetId);
+            resolvedName = info?.filename || '';
+          }
+        } catch (e) {
+          console.error('[ImageUpload] failed to resolve filename via MediaLibrary', e);
+        }
+      }
+      if (!resolvedName) {
+        resolvedName = asset.uri.split('/').pop() || `image-${Date.now()}.jpg`;
+      }
+
+      setFileName(resolvedName);
+      setMessage(`画像を選択しました（${resolvedName}）。`);
     }
   }
 
@@ -249,17 +309,22 @@ export default function ImageUploadScreen() {
         /* noop */
       }
 
-      const { data } = supabase.storage.from(bucket).getPublicUrl(computedPath || filePath);
-      setMessage(`アップロード成功: ${data.publicUrl}`);
+      // 成功時は画面ログは出さず、一覧（アップロード済み）に反映するのみ
+      setMessage(`アップロードしました（${originalDisplayName}）。`);
       await refreshList();
     } catch (e: any) {
+      // 失敗時は短文を画面に出し、詳細はコンソールに出す
+      setMessage('アップロードに失敗しました。');
       if (e?.message?.includes('Bucket not found')) {
-        setMessage(`アップロード失敗: 指定されたバケット '${bucket}' が見つかりません。Supabase の Storage でバケットを作成し、公開設定を確認してください。`);
+        console.error(
+          `[ImageUpload] upload failed: bucket not found (bucket=${bucket})`,
+          e
+        );
       } else if (e?.message?.includes('The resource already exists') || e?.statusCode === '409') {
-        setMessage('アップロード失敗: 同名のファイルが既に存在します。別のファイル名に変更してください。');
+        console.error('[ImageUpload] upload failed: resource already exists (409)', e);
       } else {
-        const extra = computedPath ? ` (path: ${computedPath})` : '';
-        setMessage(`アップロード失敗: ${e?.message ?? String(e)}${extra}`);
+        const extra = computedPath ? { computedPath } : undefined;
+        console.error('[ImageUpload] upload failed', { bucket, ...extra, error: e });
       }
     } finally {
       setUploading(false);
@@ -268,6 +333,7 @@ export default function ImageUploadScreen() {
 
   async function removeItem(storageKey: string) {
     try {
+      setMessage(null);
       const { error } = await supabase.storage.from(bucket).remove([storageKey]);
       if (error) throw error;
       try {
@@ -277,9 +343,11 @@ export default function ImageUploadScreen() {
       } catch {
         /* noop */
       }
+      setMessage('削除しました。');
       await refreshList();
     } catch (e: any) {
-      setMessage(`削除に失敗: ${e?.message ?? String(e)}`);
+      setMessage('削除に失敗しました。');
+      console.error('[ImageUpload] removeItem failed', { bucket, storageKey, error: e });
     }
   }
 
@@ -407,7 +475,7 @@ export default function ImageUploadScreen() {
     if (!user) {
       setAnalysis(null);
       setAnalysisErr('AI解析にはログインが必要です。先にログインしてください。');
-      listRef.current?.scrollToOffset({ offset: 0, animated: true });
+      listRef.current?.scrollToEnd?.({ animated: true });
       return;
     }
     setAnalysis(null);
@@ -465,12 +533,27 @@ export default function ImageUploadScreen() {
         const feedbackMsg = promptFeedback?.blockReason ? ` blockReason=${promptFeedback.blockReason}` : '';
         throw new Error(`AIの解析結果を取得できませんでした（events=${sseEvents}, textLen=${combinedText.length}${feedbackMsg}${preview ? ',' + preview : ''}）`);
       }
-      setAnalysis({ name: displayName, answer: ans.answer ?? '', explanation: ans.explanation ?? '', steps: ans.steps });
-      listRef.current?.scrollToOffset({ offset: 0, animated: true });
+      const formattedAnswer = formatAiMathTextForDisplay(ans.answer ?? '');
+      const formattedExplanation = formatAiMathTextForDisplay(ans.explanation ?? '');
+      const formattedCombined = formatAiMathTextForDisplay(combinedText ?? '');
+      const displayAnswer = formattedAnswer || formattedExplanation || formattedCombined;
+      const answerLine = firstNonEmptyLine(displayAnswer);
+      // answer が存在する時だけ解説を表示（answer が explanation 由来の場合は重複防止で非表示）
+      const displayExplanationRaw = formattedAnswer ? formattedExplanation : '';
+      // 解説の先頭に答えが書かれていることが多いので重複行を削除
+      const displayExplanation = removeLeadingLineIfMatches(displayExplanationRaw, answerLine);
+      const formattedSteps = (ans.steps || [])
+        .map((step) => formatAiMathTextForDisplay(step))
+        .map((step) => step.replace(/^\s*(?:手順|ステップ)\s*[:：]\s*/u, '').trim())
+        .filter(Boolean)
+        // 手順に答え行だけが混ざる場合があるので除外
+        .filter((step) => step.trim() !== answerLine.trim());
+      setAnalysis({ name: displayName, answer: displayAnswer, explanation: displayExplanation, steps: formattedSteps });
+      listRef.current?.scrollToEnd?.({ animated: true });
     } catch (e: any) {
       const ctx = e?.context ? `\ncontext: ${typeof e.context === 'string' ? e.context : JSON.stringify(e.context)}` : '';
       setAnalysisErr(`${e?.message ?? String(e)}${ctx}`);
-      listRef.current?.scrollToOffset({ offset: 0, animated: true });
+      listRef.current?.scrollToEnd?.({ animated: true });
     } finally {
       setAnalyzing(false);
       setAnalyzingKey(null);
@@ -526,17 +609,9 @@ export default function ImageUploadScreen() {
               <View style={{ padding: 16 }}>
                 <Text className="mb-4 text-xl font-bold">画像アップロード</Text>
 
-                {imageUri ? (
-                  <Image
-                    source={{ uri: imageUri }}
-                    style={{ width: '100%', height: 240, borderRadius: 8, marginBottom: 16 }}
-                    resizeMode="cover"
-                  />
-                ) : (
-                  <Box className="p-6 mb-4 bg-white border rounded border-outline-200">
-                    <Text className="text-typography-600">画像が選択されていません</Text>
-                  </Box>
-                )}
+                <Text className="mb-4 text-typography-600">
+                  {imageUri ? '画像を選択済み' : '画像が選択されていません'}
+                </Text>
 
                 <Text className="mb-2 text-base">ファイル名</Text>
                 <Input className="mb-2">
@@ -552,26 +627,6 @@ export default function ImageUploadScreen() {
                 {message && (
                   <Box className="p-3 mb-4 bg-white border rounded border-outline-200">
                     <Text selectable>{message}</Text>
-                  </Box>
-                )}
-
-                {analysis && (
-                  <Box className="p-3 mb-4 bg-white border rounded border-outline-200">
-                    <Text className="mb-1 font-semibold">AI解析結果（{analysis.name}）</Text>
-                    {!!analysis.answer && <Text className="mb-1">答え: {analysis.answer}</Text>}
-                    {!!analysis.explanation && <Text className="mb-1">解説: {analysis.explanation}</Text>}
-                    {!!analysis.steps?.length && (
-                      <View style={{ marginTop: 4 }}>
-                        {analysis.steps.map((s, i) => (
-                          <Text key={i} className="text-xs">{i + 1}. {s}</Text>
-                        ))}
-                      </View>
-                    )}
-                  </Box>
-                )}
-                {analysisErr && (
-                  <Box className="p-3 mb-4 bg-white border rounded border-outline-200">
-                    <Text selectable>{analysisErr}</Text>
                   </Box>
                 )}
 
@@ -597,6 +652,31 @@ export default function ImageUploadScreen() {
                 <Text className="mb-2 text-lg font-semibold">アップロード済み</Text>
               </View>
             </View>
+          }
+          ListFooterComponent={
+            (analysis || analysisErr) ? (
+              <View style={{ paddingTop: 16 }}>
+                {analysis && (
+                  <Box className="p-3 mb-4 bg-white border rounded border-outline-200">
+                    <Text className="mb-1 font-semibold">AI解析結果</Text>
+                    {!!analysis.steps?.length && (
+                      <View style={{ marginTop: 4 }}>
+                        {analysis.steps.map((s, i) => (
+                          <Text key={i} className="text-xs">{i + 1}. {s}</Text>
+                        ))}
+                      </View>
+                    )}
+                    {!!analysis.answer && <Text className="mt-2">{analysis.answer}</Text>}
+                    {!!analysis.explanation && <Text className="mt-2">解説: {analysis.explanation}</Text>}
+                  </Box>
+                )}
+                {analysisErr && (
+                  <Box className="p-3 mb-4 bg-white border rounded border-outline-200">
+                    <Text selectable>{analysisErr}</Text>
+                  </Box>
+                )}
+              </View>
+            ) : null
           }
           ListEmptyComponent={
             <View style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
